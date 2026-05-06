@@ -1,5 +1,8 @@
 import os
 import math
+import hmac
+import base64
+import hashlib
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
@@ -11,30 +14,52 @@ app = Flask(__name__)
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 ORIGIN_ADDRESS = os.getenv("ORIGIN_ADDRESS", "Avenida Melvin Jones, 333, Ponta Grossa, PR")
 FRETE_API_TOKEN = os.getenv("FRETE_API_TOKEN", "123456")
+YAMPI_SECRET = os.getenv("YAMPI_SECRET", "")
 
 
 def check_auth():
-    token_recebido = request.headers.get("Authorization", "")
-    token_esperado = f"Bearer {FRETE_API_TOKEN}"
-    return token_recebido == token_esperado
+    # Aceita Authorization Bearer para nossos testes manuais
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {FRETE_API_TOKEN}":
+        return True
+
+    # Aceita assinatura oficial da Yampi, se você configurar YAMPI_SECRET
+    if YAMPI_SECRET:
+        received_signature = request.headers.get("X-Yampi-Hmac-SHA256", "")
+        raw_body = request.get_data()
+
+        local_signature = base64.b64encode(
+            hmac.new(
+                YAMPI_SECRET.encode("utf-8"),
+                raw_body,
+                hashlib.sha256
+            ).digest()
+        ).decode("utf-8")
+
+        return hmac.compare_digest(local_signature, received_signature)
+
+    return False
 
 
 def montar_destino(data):
+    cep = (
+        data.get("zipcode")
+        or data.get("zip_code")
+        or data.get("cep")
+    )
+
+    if cep:
+        return f"{cep}, Brasil"
+
     address = data.get("address") or {}
     shipping_address = data.get("shipping_address") or {}
-    customer_address = data.get("customer_address") or {}
+    source = address or shipping_address or data
 
-    source = address or shipping_address or customer_address or data
-
-    cep = source.get("zipcode") or source.get("zip_code") or source.get("cep")
     rua = source.get("street") or source.get("address") or source.get("logradouro") or ""
     numero = source.get("number") or source.get("numero") or ""
     bairro = source.get("neighborhood") or source.get("bairro") or ""
     cidade = source.get("city") or source.get("cidade") or "Ponta Grossa"
     estado = source.get("state") or source.get("uf") or "PR"
-
-    if cep:
-        return f"{cep}, {cidade}, {estado}, Brasil"
 
     return f"{rua}, {numero}, {bairro}, {cidade}, {estado}, Brasil"
 
@@ -52,7 +77,7 @@ def calcular_distancia_km(destino):
         "mode": "driving"
     }
 
-    resposta = requests.get(url, params=params, timeout=10)
+    resposta = requests.get(url, params=params, timeout=3)
     resposta.raise_for_status()
 
     dados = resposta.json()
@@ -74,79 +99,72 @@ def calcular_preco_frete(distancia_km):
         return None
 
     if distancia_km <= 2:
-        return 525
+        return 5.25
 
     if distancia_km <= 3:
-        return 650
+        return 6.50
 
     km_extra = math.ceil(distancia_km - 3)
-    return 650 + (km_extra * 150)
+    preco = 6.50 + (km_extra * 1.50)
+
+    return round(preco, 2)
 
 
-@app.route("/", methods=["GET"])
+@app.route("/", methods=["GET", "POST"])
 def home():
     return jsonify({
         "status": "online",
         "servico": "API de Frete Yampi",
         "rota_frete": "/frete",
-        "porta_local": 5002,
         "origem": ORIGIN_ADDRESS
     })
 
 
-@app.route("/frete", methods=["GET"])
-def frete_get():
-    return jsonify({
-        "status": "rota encontrada",
-        "mensagem": "Esta rota funciona com POST. Use a Yampi ou curl para testar.",
-        "exemplo": {
-            "cep": "84010000",
-            "city": "Ponta Grossa",
-            "state": "PR"
-        }
-    })
-
-
-@app.route("/frete", methods=["POST"])
+@app.route("/frete", methods=["GET", "POST"])
 def frete():
     try:
+        if request.method == "GET":
+            return jsonify({
+                "status": "rota online",
+                "mensagem": "Use POST para calcular o frete."
+            })
+
         if not check_auth():
             return jsonify({
                 "error": "Unauthorized",
-                "mensagem": "Token inválido. Confira o header Authorization."
+                "mensagem": "Token ou assinatura inválida."
             }), 401
 
         data = request.get_json(force=True, silent=True) or {}
 
         destino = montar_destino(data)
-
-        if not destino.strip():
-            return jsonify({
-                "error": "Endereço de destino vazio"
-            }), 400
-
         distancia_km = calcular_distancia_km(destino)
         preco = calcular_preco_frete(distancia_km)
 
         if preco is None:
-            return jsonify([]), 200
+            return jsonify({
+                "quotes": []
+            }), 200
 
-        return jsonify([
-            {
-                "name": "Entrega Motoboy",
-                "description": f"Entrega local - distância aproximada: {distancia_km:.1f} km",
-                "price": int(preco),
-                "delivery_time": 0
-            }
-        ]), 200
+        return jsonify({
+            "quotes": [
+                {
+                    "name": "Entrega Motoboy",
+                    "service": "MOTOBOY",
+                    "price": preco,
+                    "days": 1,
+                    "quote_id": 1,
+                    "free_shipment": False
+                }
+            ]
+        }), 200
 
     except Exception as erro:
         print("ERRO:", erro)
 
         return jsonify({
-            "error": "Erro ao calcular frete",
-            "details": str(erro)
-        }), 500
+            "quotes": []
+        }), 200
 
 
 if __name__ == "__main__":
