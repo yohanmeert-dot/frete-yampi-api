@@ -95,19 +95,67 @@ def calcular_distancia_km(destino):
 
 
 def calcular_preco_frete(distancia_km):
-    if distancia_km > 30:
-        return None
+    """
+    Retorna:
+    - preco em reais
+    - prazo em minutos
+
+    Tabela:
+    até 0.5 km = R$ 7,50 / 40 min
+    até 1 km = R$ 8,00 / 40 min
+    até 1.5 km = R$ 9,00 / 40 min
+    até 2 km = R$ 10,50 / 45 min
+    até 2.5 km = R$ 12,50 / 50 min
+    até 3 km = R$ 13,50 / 55 min
+    até 3.5 km = R$ 15,50 / 60 min
+    até 4 km = R$ 16,00 / 65 min
+    até 5 km = R$ 18,00 / 65 min
+    até 6 km = R$ 20,00 / 70 min
+    até 7 km = R$ 22,00 / 70 min
+    até 10 km = R$ 27,00 / 70 min
+    até 20 km = R$ 40,00 / 110 min
+    """
+
+    if distancia_km <= 0.5:
+        return 7.50, 40
+
+    if distancia_km <= 1:
+        return 8.00, 40
+
+    if distancia_km <= 1.5:
+        return 9.00, 40
 
     if distancia_km <= 2:
-        return 5.25
+        return 10.50, 45
+
+    if distancia_km <= 2.5:
+        return 12.50, 50
 
     if distancia_km <= 3:
-        return 6.50
+        return 13.50, 55
 
-    km_extra = math.ceil(distancia_km - 3)
-    preco = 6.50 + (km_extra * 1.50)
+    if distancia_km <= 3.5:
+        return 15.50, 60
 
-    return round(preco, 2)
+    if distancia_km <= 4:
+        return 16.00, 65
+
+    if distancia_km <= 5:
+        return 18.00, 65
+
+    if distancia_km <= 6:
+        return 20.00, 70
+
+    if distancia_km <= 7:
+        return 22.00, 70
+
+    if distancia_km <= 10:
+        return 27.00, 70
+
+    if distancia_km <= 20:
+        return 40.00, 110
+
+    return None, None
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -139,9 +187,9 @@ def frete():
 
         destino = montar_destino(data)
         distancia_km = calcular_distancia_km(destino)
-        preco = calcular_preco_frete(distancia_km)
+        preco, minutos = calcular_preco_frete(distancia_km)
 
-        if preco is None:
+        if preco is None or minutos is None:
             return jsonify({
                 "quotes": []
             }), 200
@@ -149,7 +197,7 @@ def frete():
         return jsonify({
             "quotes": [
                 {
-                    "name": "Entrega Motoboy",
+                    "name": f"Entrega Motoboy - até {minutos} min",
                     "service": "MOTOBOY",
                     "price": preco,
                     "days": 1,
